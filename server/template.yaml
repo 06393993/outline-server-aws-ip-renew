@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+    outline-aws-address-renew
+
+    a web app that helps ec2 instance renew the ip address
+    
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+    Function:
+        Timeout: 3
+
+Parameters:
+    ActiveEC2InstanceId:
+        Type: AWS::EC2::Instance::Id
+    EIPIdleEC2InstanceId:
+        Type: AWS::EC2::Instance::Id
+    EIPAllocId:
+        Type: String
+    OutlineServerPath:
+        Type: String
+    OutlineServerPort:
+        Type: Number
+
+
+Resources:
+
+    RenewAddressDelayQueue:
+        Type: AWS::SQS::Queue
+        Properties:
+            DelaySeconds: 120
+
+    ReleaseAddressFunction:
+        Type: AWS::Serverless::Function
+        Properties:
+            CodeUri: app/
+            Handler: app.releaseAddress
+            Runtime: nodejs8.10
+            Environment:
+                Variables:
+                    ACTIVE_EC2_INSTANCE_ID: !Ref ActiveEC2InstanceId
+                    EIP_IDLE_EC2_INSTANCE_ID: !Ref EIPIdleEC2InstanceId
+                    EIP_ALLOC_ID: !Ref EIPAllocId
+                    RENEW_ADDR_DELAY_QUEUE_URL: !Join
+                        - ''
+                        - - https://sqs.
+                          - !Ref AWS::Region
+                          - .
+                          - !Ref AWS::URLSuffix
+                          - /
+                          - !Ref AWS::AccountId
+                          - /
+                          - !GetAtt RenewAddressDelayQueue.QueueName
+            Policies:
+                Version: 2012-10-17
+                Statement:
+                    - Effect: Allow
+                      Action:
+                          - ec2:AssociateAddress
+                          - ec2:DescribeInstances
+                          - ec2:DescribeAddresses
+                      Resource: '*'
+                    - Effect: Allow
+                      Action:
+                          - sqs:SendMessage
+                      Resource: !GetAtt RenewAddressDelayQueue.Arn
+            Events:
+                OutlineAddressRenew:
+                    Type: Api
+                    Properties:
+                        Path: /renew-address
+                        Method: POST
+
+    RenewAddressFunction:
+        Type: AWS::Serverless::Function
+        Properties:
+            CodeUri: app/
+            Handler: app.renewAddress
+            Runtime: nodejs8.10
+            Environment:
+                Variables:
+                    ACTIVE_EC2_INSTANCE_ID: !Ref ActiveEC2InstanceId
+                    EIP_IDLE_EC2_INSTANCE_ID: !Ref EIPIdleEC2InstanceId
+                    EIP_ALLOC_ID: !Ref EIPAllocId
+            Policies:
+                Version: 2012-10-17
+                Statement:
+                    - Effect: Allow
+                      Action:
+                          - ec2:AssociateAddress
+                      Resource: '*'
+            Events:
+                OutlineRenewAddressEventQueue:
+                    Type: SQS
+                    Properties:
+                        Queue: !GetAtt RenewAddressDelayQueue.Arn
+
+    GetOutlineServerFunction:
+        Type: AWS::Serverless::Function
+        Properties:
+            CodeUri: app/
+            Handler: app.getOutlineServer
+            Runtime: nodejs8.10
+            Environment:
+                Variables:
+                    ACTIVE_EC2_INSTANCE_ID: !Ref ActiveEC2InstanceId
+                    OUTLINE_SERVER_PATH: !Ref OutlineServerPath
+                    OUTLINE_SERVER_PORT: !Ref OutlineServerPort
+            Policies:
+                Version: 2012-10-17
+                Statement:
+                    - Effect: Allow
+                      Action:
+                          - ec2:describeAddresses
+                          - ec2:describeInstances
+                      Resource: '*'
+            Events:
+                GetOutlineServerApi:
+                    Type: Api
+                    Properties:
+                        Path: /outline-server
+                        Method: GET
+
+Outputs:
+
+    RenewAddressApi:
+      Description: "API Gateway endpoint URL for Prod stage to renew address"
+      Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/renew-address/"
+
+    ReleaseAddressFunction:
+      Description: "Release Address Lambda Function ARN"
+      Value: !GetAtt ReleaseAddressFunction.Arn
+
+    RenewAddressFunction:
+      Description: "Renew Address Lambda Function ARN"
+      Value: !GetAtt RenewAddressFunction.Arn
+
+    ReleaseAddressFunctionIamRole:
+      Description: "Implicit IAM Role created for Release Address function"
+      Value: !GetAtt ReleaseAddressFunctionRole.Arn
